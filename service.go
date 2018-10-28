@@ -7,7 +7,9 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"os"
 
+  _ "github.com/go-sql-driver/mysql"
 	"github.com/go-kit/kit/log"
 	"github.com/jmoiron/sqlx"
 )
@@ -56,15 +58,24 @@ var baseQuery = "SELECT sock.sock_id AS id, sock.name, sock.description, sock.pr
 
 // NewCatalogueService returns an implementation of the Service interface,
 // with connection to an SQL database.
-func NewCatalogueService(db *sqlx.DB, logger log.Logger) Service {
+func NewCatalogueService(dsn string, logger log.Logger) Service {
+
+	// Data domain.
+	db, err := sqlx.Open("mysql", dsn)
+	if err != nil {
+		logger.Log("err", err)
+		os.Exit(1)
+	}
+	db.Close()
+
 	return &catalogueService{
-		db:     db,
+		dsn:    dsn,
 		logger: logger,
 	}
 }
 
 type catalogueService struct {
-	db     *sqlx.DB
+	dsn    string
 	logger log.Logger
 }
 
@@ -93,7 +104,15 @@ func (s *catalogueService) List(tags []string, order string, pageNum, pageSize i
 
 	query += ";"
 
-	err := s.db.Select(&socks, query, args...)
+	db, err := sqlx.Open("mysql", s.dsn)
+	if err != nil {
+		s.logger.Log("database error", err)
+		return []Sock{}, ErrDBConnection
+	}
+
+	defer db.Close()
+
+	err = db.Select(&socks, query, args...)
 	if err != nil {
 		s.logger.Log("database error", err)
 		return []Sock{}, ErrDBConnection
@@ -102,9 +121,6 @@ func (s *catalogueService) List(tags []string, order string, pageNum, pageSize i
 		socks[i].ImageURL = []string{s.ImageURL_1, s.ImageURL_2}
 		socks[i].Tags = strings.Split(s.TagString, ",")
 	}
-
-	// DEMO: Change 0 to 850
-	time.Sleep(0 * time.Millisecond)
 
 	socks = cut(socks, pageNum, pageSize)
 
@@ -128,7 +144,15 @@ func (s *catalogueService) Count(tags []string) (int, error) {
 
 	query += ";"
 
-	sel, err := s.db.Prepare(query)
+	db, err := sqlx.Open("mysql", s.dsn)
+	if err != nil {
+		s.logger.Log("database error", err)
+		return 0, ErrDBConnection
+	}
+
+	defer db.Close()
+
+	sel, err := db.Prepare(query)
 
 	if err != nil {
 		s.logger.Log("database error", err)
@@ -150,8 +174,16 @@ func (s *catalogueService) Count(tags []string) (int, error) {
 func (s *catalogueService) Get(id string) (Sock, error) {
 	query := baseQuery + " WHERE sock.sock_id =? GROUP BY sock.sock_id;"
 
+	db, err := sqlx.Open("mysql", s.dsn)
+	if err != nil {
+		s.logger.Log("database error", err)
+		return Sock{}, ErrDBConnection
+	}
+
+	defer db.Close()
+
 	var sock Sock
-	err := s.db.Get(&sock, query, id)
+	err = db.Get(&sock, query, id)
 	if err != nil {
 		s.logger.Log("database error", err)
 		return Sock{}, ErrNotFound
@@ -167,16 +199,24 @@ func (s *catalogueService) Health() []Health {
 	var health []Health
 	dbstatus := "OK"
 
-	err := s.db.Ping()
+	db, err := sqlx.Open("mysql", s.dsn)
+	if err != nil {
+		s.logger.Log("database error", err)
+		dbstatus = "err"
+	}
+
+	defer db.Close()
+
+	err = db.Ping()
 	if err != nil {
 		dbstatus = "err"
 	}
 
-	app := Health{"catalogue", "OK", time.Now().String()}
-	db := Health{"catalogue-db", dbstatus, time.Now().String()}
+	apphealth := Health{"catalogue", "OK", time.Now().String()}
+	dbhealth := Health{"catalogue-db", dbstatus, time.Now().String()}
 
-	health = append(health, app)
-	health = append(health, db)
+	health = append(health, apphealth)
+	health = append(health, dbhealth)
 
 	return health
 }
@@ -184,7 +224,16 @@ func (s *catalogueService) Health() []Health {
 func (s *catalogueService) Tags() ([]string, error) {
 	var tags []string
 	query := "SELECT name FROM tag;"
-	rows, err := s.db.Query(query)
+
+	db, err := sqlx.Open("mysql", s.dsn)
+	if err != nil {
+		s.logger.Log("database error", err)
+		return []string{}, ErrDBConnection
+	}
+
+	defer db.Close()
+
+	rows, err := db.Query(query)
 	if err != nil {
 		s.logger.Log("database error", err)
 		return []string{}, ErrDBConnection
